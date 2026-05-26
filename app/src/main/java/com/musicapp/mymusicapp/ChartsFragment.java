@@ -30,8 +30,8 @@ public class ChartsFragment extends Fragment {
 
     private ArtistAdapter adapter;
     private final List<Artist> artistList = new ArrayList<>();
-    private android.widget.ProgressBar loadingIndicator;
-    private android.widget.EditText searchEditText;
+    private com.google.android.material.progressindicator.CircularProgressIndicator loadingIndicator;
+    private com.google.android.material.textfield.TextInputEditText searchEditText;
 
     static class Artist {
         String name;
@@ -49,6 +49,7 @@ public class ChartsFragment extends Fragment {
 
         recyclerView = view.findViewById(R.id.recyclerView);
         loadingIndicator = view.findViewById(R.id.loadingIndicator);
+        searchEditText = view.findViewById(R.id.searchEditText);
         errorLayout = view.findViewById(R.id.errorLayout);
         errorMessageText = view.findViewById(R.id.errorMessage);
         searchEditText = view.findViewById(R.id.searchEditText);
@@ -200,19 +201,13 @@ public class ChartsFragment extends Fragment {
 
             // Tapping an item saves it to the local Room storage database
             holder.itemView.setOnClickListener(view -> {
-                java.util.concurrent.Executors.newSingleThreadExecutor().execute(() -> {
-                    AppDatabase db = AppDatabase.getDatabase(view.getContext().getApplicationContext());
-
-                    // Save to Room table
-                    db.artistDao().insertFavorite(new FavoriteArtist(artist.name, artist.listeners));
-
-                    // Show confirmation on UI Thread
-                    if (getActivity() != null) {
-                        getActivity().runOnUiThread(() -> {
-                            Toast.makeText(getContext(), artist.name + " added to collection!", Toast.LENGTH_SHORT).show();
-                        });
-                    }
-                });
+                // Transaction routing to open the complete MD3 Artist Detail view panel
+                if (getActivity() != null) {
+                    getActivity().getSupportFragmentManager().beginTransaction()
+                            .replace(R.id.fragment_container, ArtistDetailFragment.newInstance(artist.name))
+                            .addToBackStack(null) // Allows users to hit the back button to return to the charts!
+                            .commit();
+                }
             });
         }
 

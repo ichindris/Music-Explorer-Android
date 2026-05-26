@@ -33,6 +33,43 @@ public class CollectionFragment extends Fragment {
         adapter = new CollectionAdapter(favoriteList);
         recyclerView.setAdapter(adapter);
 
+        // Setup fluid modern swipe-to-delete behavior configuration
+        new androidx.recyclerview.widget.ItemTouchHelper(new androidx.recyclerview.widget.ItemTouchHelper.SimpleCallback(0,
+                androidx.recyclerview.widget.ItemTouchHelper.LEFT | androidx.recyclerview.widget.ItemTouchHelper.RIGHT) {
+
+            @Override
+            public boolean onMove(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder viewHolder, @NonNull RecyclerView.ViewHolder target) {
+                return false; // We only need swipe handling, no drag reordering
+            }
+
+            // FIXED: Changed method name from swiped to onSwiped to correctly override the abstract method
+            @Override
+            public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
+                int position = viewHolder.getBindingAdapterPosition();
+                FavoriteArtist artistToDelete = favoriteList.get(position);
+
+                // Run data removal completely off the main thread via ExecutorService to prevent application stutter
+                java.util.concurrent.Executors.newSingleThreadExecutor().execute(() -> {
+                    AppDatabase db = AppDatabase.getDatabase(requireContext().getApplicationContext());
+                    db.artistDao().deleteFavorite(artistToDelete);
+
+                    // Sync changes back to the UI layout safely on the main thread loop
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(() -> {
+                            favoriteList.remove(position);
+                            adapter.notifyItemRemoved(position);
+
+                            // Re-check empty state conditions to draw friendly layout messages if records reach 0
+                            if (favoriteList.isEmpty()) {
+                                emptyStateText.setVisibility(View.VISIBLE);
+                                recyclerView.setVisibility(View.GONE);
+                            }
+                        });
+                    }
+                });
+            }
+        }).attachToRecyclerView(recyclerView);
+
         return view;
     }
 
