@@ -145,4 +145,18 @@ public class NetworkManager {
             }
         });
     }
+
+    public static boolean isNetworkAvailable(android.content.Context context) {
+        android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+
+        if (cm != null) {
+            android.net.NetworkCapabilities capabilities = cm.getNetworkCapabilities(cm.getActiveNetwork());
+            if (capabilities != null) {
+                return capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                        capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR);
+            }
+        }
+        return false;
+    }
 }

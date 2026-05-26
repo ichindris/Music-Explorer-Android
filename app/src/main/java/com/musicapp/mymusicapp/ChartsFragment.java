@@ -1,5 +1,8 @@
 package com.musicapp.mymusicapp;
 
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -42,6 +45,21 @@ public class ChartsFragment extends Fragment {
         }
     }
 
+    // UTILITY METHOD: Checks active internet capabilities before executing network requests
+    private boolean isNetworkAvailable() {
+        if (getContext() == null) return false;
+        ConnectivityManager cm = (ConnectivityManager)
+                getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (cm != null) {
+            NetworkCapabilities capabilities = cm.getNetworkCapabilities(cm.getActiveNetwork());
+            return capabilities != null && (
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+            );
+        }
+        return false;
+    }
+
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
@@ -52,12 +70,13 @@ public class ChartsFragment extends Fragment {
         searchEditText = view.findViewById(R.id.searchEditText);
         errorLayout = view.findViewById(R.id.errorLayout);
         errorMessageText = view.findViewById(R.id.errorMessage);
-        searchEditText = view.findViewById(R.id.searchEditText);
 
         // Bind layout structures explicitly
-        recyclerView.setLayoutManager(new LinearLayoutManager(requireContext()));
-        adapter = new ArtistAdapter(artistList);
-        recyclerView.setAdapter(adapter);
+        if (recyclerView != null) {
+            recyclerView.setLayoutManager(new LinearLayoutManager(requireContext()));
+            adapter = new ArtistAdapter(artistList);
+            recyclerView.setAdapter(adapter);
+        }
 
         if (searchEditText != null) {
             searchEditText.setOnEditorActionListener((v, actionId, event) -> {
@@ -73,7 +92,14 @@ public class ChartsFragment extends Fragment {
 
         View retryBtn = view.findViewById(R.id.btnRetry);
         if (retryBtn != null) {
-            retryBtn.setOnClickListener(v -> fetchData());
+            retryBtn.setOnClickListener(v -> {
+                String query = searchEditText != null ? searchEditText.getText().toString().trim() : "";
+                if (!query.isEmpty()) {
+                    executeSearch(query); // Retry explicit search query
+                } else {
+                    fetchData(); // Retry base chart data fetch
+                }
+            });
         }
 
         fetchData();
@@ -81,6 +107,12 @@ public class ChartsFragment extends Fragment {
     }
 
     private void fetchData() {
+        // PRE-FLIGHT CHECK: Catch offline state immediately before starting background threads
+        if (!isNetworkAvailable()) {
+            showErrorState("You are currently offline. Please check your internet connection and try again.");
+            return;
+        }
+
         showLoadingState();
 
         new NetworkManager().fetchTopArtists(API_KEY, new NetworkManager.Callback() {
@@ -107,12 +139,18 @@ public class ChartsFragment extends Fragment {
 
             @Override
             public void onError(String errorMessage) {
-                showErrorState(errorMessage);
+                showErrorState("Failed to retrieve top charts data from the server.");
             }
         });
     }
 
     private void executeSearch(String query) {
+        // PRE-FLIGHT CHECK: Intercept search execution if the network is absent
+        if (!isNetworkAvailable()) {
+            showErrorState("You are currently offline. Cannot perform search query.");
+            return;
+        }
+
         showLoadingState();
 
         new NetworkManager().searchArtist(query, API_KEY, new NetworkManager.Callback() {
@@ -132,7 +170,11 @@ public class ChartsFragment extends Fragment {
                         artistList.add(new Artist(name, "Listeners: " + listeners));
                     }
 
-                    showSuccessState();
+                    if (artistList.isEmpty()) {
+                        showErrorState("No artists found matching your search term.");
+                    } else {
+                        showSuccessState();
+                    }
                 } catch (Exception e) {
                     showErrorState("Parsing search results failed.");
                 }
@@ -140,7 +182,7 @@ public class ChartsFragment extends Fragment {
 
             @Override
             public void onError(String errorMessage) {
-                showErrorState(errorMessage);
+                showErrorState("Failed to complete search request. Please try again.");
             }
         });
     }
@@ -162,9 +204,10 @@ public class ChartsFragment extends Fragment {
                 if (errorLayout != null) errorLayout.setVisibility(View.GONE);
                 if (recyclerView != null) {
                     recyclerView.setVisibility(View.VISIBLE);
+                }
+                if (adapter != null) {
                     adapter.notifyDataSetChanged();
                 }
-                Toast.makeText(getContext(), "List elements linked: " + artistList.size(), Toast.LENGTH_SHORT).show();
             });
         }
     }
@@ -176,7 +219,9 @@ public class ChartsFragment extends Fragment {
                 if (recyclerView != null) recyclerView.setVisibility(View.GONE);
                 if (errorLayout != null) {
                     errorLayout.setVisibility(View.VISIBLE);
-                    if (errorMessageText != null) errorMessageText.setText(message);
+                }
+                if (errorMessageText != null) {
+                    errorMessageText.setText(message);
                 }
             });
         }
@@ -184,7 +229,10 @@ public class ChartsFragment extends Fragment {
 
     class ArtistAdapter extends RecyclerView.Adapter<ArtistAdapter.ViewHolder> {
         private final List<Artist> list;
-        ArtistAdapter(List<Artist> list) { this.list = list; }
+
+        ArtistAdapter(List<Artist> list) {
+            this.list = list;
+        }
 
         @NonNull
         @Override
@@ -196,26 +244,32 @@ public class ChartsFragment extends Fragment {
         @Override
         public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
             Artist artist = list.get(position);
-            holder.nameText.setText(artist.name);
-            holder.listenersText.setText(artist.listeners);
 
-            // Tapping an item saves it to the local Room storage database
+            if (holder.nameText != null) {
+                holder.nameText.setText(artist.name);
+            }
+            if (holder.listenersText != null) {
+                holder.listenersText.setText(artist.listeners);
+            }
+
             holder.itemView.setOnClickListener(view -> {
-                // Transaction routing to open the complete MD3 Artist Detail view panel
                 if (getActivity() != null) {
                     getActivity().getSupportFragmentManager().beginTransaction()
                             .replace(R.id.fragment_container, ArtistDetailFragment.newInstance(artist.name))
-                            .addToBackStack(null) // Allows users to hit the back button to return to the charts!
+                            .addToBackStack(null)
                             .commit();
                 }
             });
         }
 
         @Override
-        public int getItemCount() { return list.size(); }
+        public int getItemCount() {
+            return list != null ? list.size() : 0;
+        }
 
         class ViewHolder extends RecyclerView.ViewHolder {
             TextView nameText, listenersText;
+
             ViewHolder(View itemView) {
                 super(itemView);
                 nameText = itemView.findViewById(R.id.artistName);
