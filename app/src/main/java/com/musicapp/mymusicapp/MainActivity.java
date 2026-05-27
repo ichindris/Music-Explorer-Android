@@ -37,7 +37,7 @@ public class MainActivity extends AppCompatActivity {
                 if (item.getItemId() == R.id.nav_charts) {
                     selectedFragment = new ChartsFragment();
                 } else if (item.getItemId() == R.id.nav_collection) {
-                    selectedFragment = new CollectionFragment();
+                    selectedFragment = new CollectionFragment(); // Points seamlessly to your database screen!
                 }
 
                 if (selectedFragment != null) {

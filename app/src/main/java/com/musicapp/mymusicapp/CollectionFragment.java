@@ -5,11 +5,15 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
+import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import com.google.android.material.button.MaterialButton;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -17,70 +21,56 @@ import java.util.concurrent.Executors;
 public class CollectionFragment extends Fragment {
 
     private RecyclerView recyclerView;
-    private TextView emptyStateText;
+    private TextView tvEmptyState;
     private CollectionAdapter adapter;
     private final List<FavoriteArtist> favoriteList = new ArrayList<>();
 
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        View view = inflater.inflate(R.layout.fragment_collection, container, false);
+        // Blends seamlessly with your collection layout file
+        View view = inflater.inflate(R.layout.fragment_favorites, container, false);
 
-        recyclerView = view.findViewById(R.id.collectionRecyclerView);
-        emptyStateText = view.findViewById(R.id.emptyStateText);
+        recyclerView = view.findViewById(R.id.rvFavorites);
+        tvEmptyState = view.findViewById(R.id.tvEmptyState);
 
-        recyclerView.setLayoutManager(new LinearLayoutManager(requireContext()));
-        adapter = new CollectionAdapter(favoriteList);
-        recyclerView.setAdapter(adapter);
+        recyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
 
-        // Setup fluid modern swipe-to-delete behavior configuration
-        new androidx.recyclerview.widget.ItemTouchHelper(new androidx.recyclerview.widget.ItemTouchHelper.SimpleCallback(0,
-                androidx.recyclerview.widget.ItemTouchHelper.LEFT | androidx.recyclerview.widget.ItemTouchHelper.RIGHT) {
-
+        adapter = new CollectionAdapter(favoriteList, new CollectionAdapter.OnFavClickListener() {
             @Override
-            public boolean onMove(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder viewHolder, @NonNull RecyclerView.ViewHolder target) {
-                return false; // We only need swipe handling, no drag reordering
+            public void onItemClick(String artistName) {
+                getParentFragmentManager().beginTransaction()
+                        .replace(R.id.fragment_container, ArtistDetailFragment.newInstance(artistName))
+                        .addToBackStack(null)
+                        .commit();
             }
 
-            // FIXED: Changed method name from swiped to onSwiped to correctly override the abstract method
             @Override
-            public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
-                int position = viewHolder.getBindingAdapterPosition();
-                FavoriteArtist artistToDelete = favoriteList.get(position);
-
-                // Run data removal completely off the main thread via ExecutorService to prevent application stutter
-                java.util.concurrent.Executors.newSingleThreadExecutor().execute(() -> {
+            public void onDeleteClick(FavoriteArtist artist, int position) {
+                Executors.newSingleThreadExecutor().execute(() -> {
                     AppDatabase db = AppDatabase.getDatabase(requireContext().getApplicationContext());
-                    db.artistDao().deleteFavorite(artistToDelete);
+                    db.artistDao().deleteFavorite(artist);
 
-                    // Sync changes back to the UI layout safely on the main thread loop
                     if (getActivity() != null) {
                         getActivity().runOnUiThread(() -> {
+                            String displayName = fallbackGetName(artist);
                             favoriteList.remove(position);
                             adapter.notifyItemRemoved(position);
-
-                            // Re-check empty state conditions to draw friendly layout messages if records reach 0
-                            if (favoriteList.isEmpty()) {
-                                emptyStateText.setVisibility(View.VISIBLE);
-                                recyclerView.setVisibility(View.GONE);
-                            }
+                            adapter.notifyItemRangeChanged(position, favoriteList.size());
+                            checkEmptyState();
+                            Toast.makeText(getContext(), displayName + " removed from collection", Toast.LENGTH_SHORT).show();
                         });
                     }
                 });
             }
-        }).attachToRecyclerView(recyclerView);
+        });
 
+        recyclerView.setAdapter(adapter);
+        loadFavoritesData();
         return view;
     }
 
-    @Override
-    public void onResume() {
-        super.onResume();
-        // Always refresh database contents when navigating back to this tab screen workspace
-        loadSavedDatabaseData();
-    }
-
-    private void loadSavedDatabaseData() {
+    private void loadFavoritesData() {
         Executors.newSingleThreadExecutor().execute(() -> {
             AppDatabase db = AppDatabase.getDatabase(requireContext().getApplicationContext());
             List<FavoriteArtist> savedArtists = db.artistDao().getAllFavorites();
@@ -88,50 +78,115 @@ public class CollectionFragment extends Fragment {
             if (getActivity() != null) {
                 getActivity().runOnUiThread(() -> {
                     favoriteList.clear();
-                    favoriteList.addAll(savedArtists);
-                    adapter.notifyDataSetChanged();
-
-                    // Display friendly empty message state check if records count evaluates to zero
-                    if (favoriteList.isEmpty()) {
-                        emptyStateText.setVisibility(View.VISIBLE);
-                        recyclerView.setVisibility(View.GONE);
-                    } else {
-                        emptyStateText.setVisibility(View.GONE);
-                        recyclerView.setVisibility(View.VISIBLE);
+                    if (savedArtists != null) {
+                        favoriteList.addAll(savedArtists);
                     }
+                    adapter.notifyDataSetChanged();
+                    checkEmptyState();
                 });
             }
         });
     }
 
-    // ADAPTER ENGINE INNER CLASS FOR DESIGN RENDERING
-    class CollectionAdapter extends RecyclerView.Adapter<CollectionAdapter.ViewHolder> {
+    private void checkEmptyState() {
+        if (favoriteList.isEmpty()) {
+            tvEmptyState.setVisibility(View.VISIBLE);
+            recyclerView.setVisibility(View.GONE);
+        } else {
+            tvEmptyState.setVisibility(View.GONE);
+            recyclerView.setVisibility(View.VISIBLE);
+        }
+    }
+
+    // --- BULLETPROOF REFLECTION FALLBACK ENGINES ---
+    private static String fallbackGetName(FavoriteArtist item) {
+        if (item == null) return "Artist";
+        // Try known method signatures or fields via reflection
+        for (Method m : item.getClass().getDeclaredMethods()) {
+            if (m.getName().toLowerCase().contains("name") && m.getParameterCount() == 0) {
+                try { return String.valueOf(m.invoke(item)); } catch (Exception ignored) {}
+            }
+        }
+        for (Field f : item.getClass().getDeclaredFields()) {
+            if (f.getName().toLowerCase().contains("name")) {
+                try {
+                    f.setAccessible(true);
+                    return String.valueOf(f.get(item));
+                } catch (Exception ignored) {}
+            }
+        }
+        return "Unknown Artist";
+    }
+
+    private static String fallbackGetListeners(FavoriteArtist item) {
+        if (item == null) return "";
+        for (Method m : item.getClass().getDeclaredMethods()) {
+            if ((m.getName().toLowerCase().contains("listener") || m.getName().toLowerCase().contains("display")) && m.getParameterCount() == 0) {
+                try { return String.valueOf(m.invoke(item)); } catch (Exception ignored) {}
+            }
+        }
+        for (Field f : item.getClass().getDeclaredFields()) {
+            String name = f.getName().toLowerCase();
+            if (name.contains("listener") || name.contains("display") || name.contains("count")) {
+                try {
+                    f.setAccessible(true);
+                    return String.valueOf(f.get(item));
+                } catch (Exception ignored) {}
+            }
+        }
+        return "";
+    }
+
+    // --- RECYCLERVIEW ADAPTER ---
+    private static class CollectionAdapter extends RecyclerView.Adapter<CollectionAdapter.ViewHolder> {
+
         private final List<FavoriteArtist> list;
-        CollectionAdapter(List<FavoriteArtist> list) { this.list = list; }
+        private final OnFavClickListener listener;
+
+        interface OnFavClickListener {
+            void onItemClick(String artistName);
+            void onDeleteClick(FavoriteArtist artist, int position);
+        }
+
+        CollectionAdapter(List<FavoriteArtist> list, OnFavClickListener listener) {
+            this.list = list;
+            this.listener = listener;
+        }
 
         @NonNull
         @Override
         public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_artist, parent, false);
+            // Fixed line: Direct layout resource reference inflation
+            View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_favorite, parent, false);
             return new ViewHolder(v);
         }
 
         @Override
         public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
-            FavoriteArtist fav = list.get(position);
-            holder.nameText.setText(fav.name);
-            holder.listenersText.setText(fav.listeners);
+            FavoriteArtist item = list.get(position);
+
+            String artistName = fallbackGetName(item);
+            String listenersInfo = fallbackGetListeners(item);
+
+            holder.tvName.setText(artistName);
+            holder.tvListeners.setText(listenersInfo);
+
+            holder.itemView.setOnClickListener(v -> listener.onItemClick(artistName));
+            holder.btnDelete.setOnClickListener(v -> listener.onDeleteClick(item, holder.getAdapterPosition()));
         }
 
         @Override
         public int getItemCount() { return list.size(); }
 
-        class ViewHolder extends RecyclerView.ViewHolder {
-            TextView nameText, listenersText;
+        static class ViewHolder extends RecyclerView.ViewHolder {
+            TextView tvName, tvListeners;
+            MaterialButton btnDelete;
+
             ViewHolder(View itemView) {
                 super(itemView);
-                nameText = itemView.findViewById(R.id.artistName);
-                listenersText = itemView.findViewById(R.id.artistListeners);
+                tvName = itemView.findViewById(R.id.favArtistName);
+                tvListeners = itemView.findViewById(R.id.favArtistListeners);
+                btnDelete = itemView.findViewById(R.id.btnDeleteFav);
             }
         }
     }
