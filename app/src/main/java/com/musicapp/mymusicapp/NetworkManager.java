@@ -2,17 +2,19 @@ package com.musicapp.mymusicapp;
 
 import android.os.Handler;
 import android.os.Looper;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class NetworkManager {
 
-    // Executor Service to safely run network tasks off the main UI thread
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -21,64 +23,94 @@ public class NetworkManager {
         void onError(String errorMessage);
     }
 
+    // EXPANDED CALLBACK: Now handles biography, stats, sharing link, tracks, similar artists AND albums!
     public interface ArtistDetailCallback {
-        void onSuccess(String bio, String listeners, String url, List<String> topTracks, List<String> similarArtists);
+        void onSuccess(String bio, String listeners, String url, List<String> topTracks, List<String> topAlbums, List<String> similarArtists);
         void onFailure(String error);
     }
 
     public static void fetchArtistDetails(String artistName, String apiKey, ArtistDetailCallback callback) {
         java.util.concurrent.Executors.newSingleThreadExecutor().execute(() -> {
             try {
-                // Encode the artist name to cleanly handle spaces and special characters in URL string formatting
                 String encodedArtist = java.net.URLEncoder.encode(artistName, "UTF-8");
-                String urlString = "https://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist="
+
+                // 1. Fetch main info (Bio, Listeners, Share Link, Similar Artists)
+                String infoUrlStr = "https://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist="
                         + encodedArtist + "&api_key=" + apiKey + "&format=json";
+                String infoResponse = makeHttpRequest(infoUrlStr);
 
-                java.net.URL url = new java.net.URL(urlString);
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("GET");
+                // 2. Fetch top tracks dynamically to replace placeholders
+                String tracksUrlStr = "https://ws.audioscrobbler.com/2.0/?method=artist.gettoptracks&artist="
+                        + encodedArtist + "&api_key=" + apiKey + "&limit=4&format=json";
+                String tracksResponse = makeHttpRequest(tracksUrlStr);
 
-                java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream()));
-                StringBuilder response = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-                reader.close();
+                // 3. Fetch top albums dynamically to fulfill the missing handout criteria
+                String albumsUrlStr = "https://ws.audioscrobbler.com/2.0/?method=artist.gettopalbums&artist="
+                        + encodedArtist + "&api_key=" + apiKey + "&limit=4&format=json";
+                String albumsResponse = makeHttpRequest(albumsUrlStr);
 
-                // Native parsing engine
-                org.json.JSONObject jsonObject = new org.json.JSONObject(response.toString());
-                org.json.JSONObject artistObj = jsonObject.getJSONObject("artist");
-
+                // --- PARSE MAIN INFO ---
+                JSONObject infoJson = new JSONObject(infoResponse);
+                JSONObject artistObj = infoJson.getJSONObject("artist");
                 String listeners = artistObj.getJSONObject("stats").getString("listeners");
                 String profileUrl = artistObj.getString("url");
-                String bioSummary = artistObj.getJSONObject("bio").getString("summary");
+                String bioSummary = artistObj.getJSONObject("bio").getString("summary").replaceAll("<[^>]*>", "");
 
-                // Strip out any HTML tags/links Last.fm includes in their short descriptions
-                bioSummary = bioSummary.replaceAll("<[^>]*>", "");
-
-                // Parse placeholders for Tracks and Similar lists to fulfill criteria
-                List<String> tracksPlaceholder = new java.util.ArrayList<>();
-                tracksPlaceholder.add("Top Track #1 - Popular Stream");
-                tracksPlaceholder.add("Top Track #2 - Radio Edit");
-                tracksPlaceholder.add("Top Track #3 - Live Recording");
-
-                List<String> similarPlaceholder = new java.util.ArrayList<>();
-                org.json.JSONArray similarArray = artistObj.getJSONObject("similar").getJSONArray("artist");
+                List<String> similarList = new ArrayList<>();
+                JSONArray similarArray = artistObj.getJSONObject("similar").getJSONArray("artist");
                 for (int i = 0; i < Math.min(similarArray.length(), 4); i++) {
-                    similarPlaceholder.add(similarArray.getJSONObject(i).getString("name"));
+                    similarList.add(similarArray.getJSONObject(i).getString("name"));
                 }
 
-                String finalBioSummary = bioSummary;
-                callback.onSuccess(finalBioSummary, listeners, profileUrl, tracksPlaceholder, similarPlaceholder);
+                // --- PARSE REAL TOP TRACKS ---
+                List<String> tracksList = new ArrayList<>();
+                try {
+                    JSONObject tracksJson = new JSONObject(tracksResponse);
+                    JSONArray tracksArray = tracksJson.getJSONObject("toptracks").getJSONArray("track");
+                    for (int i = 0; i < Math.min(tracksArray.length(), 4); i++) {
+                        tracksList.add(tracksArray.getJSONObject(i).getString("name"));
+                    }
+                } catch (Exception ignored) {
+                    tracksList.add("No top tracks available");
+                }
+
+                // --- PARSE REAL TOP ALBUMS ---
+                List<String> albumsList = new ArrayList<>();
+                try {
+                    JSONObject albumsJson = new JSONObject(albumsResponse);
+                    JSONArray albumsArray = albumsJson.getJSONObject("topalbums").getJSONArray("album");
+                    for (int i = 0; i < Math.min(albumsArray.length(), 4); i++) {
+                        albumsList.add(albumsArray.getJSONObject(i).getString("name"));
+                    }
+                } catch (Exception ignored) {
+                    albumsList.add("No top albums available");
+                }
+
+                new Handler(Looper.getMainLooper()).post(() ->
+                        callback.onSuccess(bioSummary, listeners, profileUrl, tracksList, albumsList, similarList)
+                );
 
             } catch (Exception e) {
-                callback.onFailure(e.getMessage());
+                new Handler(Looper.getMainLooper()).post(() -> callback.onFailure(e.getMessage()));
             }
         });
     }
 
-    // Method 1: Fetch Global Top Charts
+    // Helper method to keep detail requests modular and prevent duplication
+    private static String makeHttpRequest(String urlString) throws Exception {
+        URL url = new URL(urlString);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+        StringBuilder response = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            response.append(line);
+        }
+        reader.close();
+        return response.toString();
+    }
+
     public void fetchTopArtists(String apiKey, Callback callback) {
         executor.execute(() -> {
             try {
@@ -111,11 +143,9 @@ public class NetworkManager {
         });
     }
 
-    // Method 2: Search for an Artist (Fixes the missing method error!)
     public void searchArtist(String query, String apiKey, Callback callback) {
         executor.execute(() -> {
             try {
-                // Safely encode spaces and special symbols in the user's search query
                 String encodedQuery = java.net.URLEncoder.encode(query, "UTF-8");
                 String urlString = "https://ws.audioscrobbler.com/2.0/?method=artist.search&artist="
                         + encodedQuery + "&api_key=" + apiKey + "&format=json";

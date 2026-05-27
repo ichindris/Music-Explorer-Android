@@ -20,7 +20,7 @@ import java.util.concurrent.Executors;
 public class ArtistDetailFragment extends Fragment {
 
     private static final String ARG_ARTIST_NAME = "artist_name";
-    private static final String API_KEY = "d419eb5921550293b690b18c178b3556"; // Explicit assignment key reference
+    private static final String API_KEY = "d419eb5921550293b690b18c178b3556"; // Your active assignment key
 
     private String artistName;
     private String artistProfileUrl = "https://www.last.fm";
@@ -28,10 +28,11 @@ public class ArtistDetailFragment extends Fragment {
 
     private TextView tvName, tvListeners, tvBio;
     private MaterialButton btnSave, btnShare;
-    private RecyclerView rvTracks, rvSimilar;
-    private SimpleStringAdapter tracksAdapter, similarAdapter;
+    private RecyclerView rvTracks, rvAlbums, rvSimilar;
+    private SimpleStringAdapter tracksAdapter, albumsAdapter, similarAdapter;
 
     private final List<String> tracksList = new ArrayList<>();
+    private final List<String> albumsList = new ArrayList<>();
     private final List<String> similarList = new ArrayList<>();
 
     public static ArtistDetailFragment newInstance(String artistName) {
@@ -61,18 +62,24 @@ public class ArtistDetailFragment extends Fragment {
         btnSave = view.findViewById(R.id.btnSaveCollection);
         btnShare = view.findViewById(R.id.btnShareArtist);
         rvTracks = view.findViewById(R.id.rvTopTracks);
+        rvAlbums = view.findViewById(R.id.rvTopAlbums);
         rvSimilar = view.findViewById(R.id.rvSimilarArtists);
 
         tvName.setText(artistName);
 
-        // Setup layouts for dynamic sub-lists
+        // Setup tracks data list binding
         rvTracks.setLayoutManager(new LinearLayoutManager(getContext()));
         tracksAdapter = new SimpleStringAdapter(tracksList, null);
         rvTracks.setAdapter(tracksAdapter);
 
+        // Setup albums data list binding
+        rvAlbums.setLayoutManager(new LinearLayoutManager(getContext()));
+        albumsAdapter = new SimpleStringAdapter(albumsList, null);
+        rvAlbums.setAdapter(albumsAdapter);
+
+        // Setup similar profiles handling navigation link
         rvSimilar.setLayoutManager(new LinearLayoutManager(getContext()));
         similarAdapter = new SimpleStringAdapter(similarList, name -> {
-            // Tapping a similar artist re-launches the details workflow for that artist!
             getParentFragmentManager().beginTransaction()
                     .replace(R.id.fragment_container, ArtistDetailFragment.newInstance(name))
                     .addToBackStack(null)
@@ -80,7 +87,7 @@ public class ArtistDetailFragment extends Fragment {
         });
         rvSimilar.setAdapter(similarAdapter);
 
-        // Setup share sheet action intent
+        // Native platform share implementation
         btnShare.setOnClickListener(v -> {
             Intent shareIntent = new Intent(Intent.ACTION_SEND);
             shareIntent.setType("text/plain");
@@ -89,11 +96,16 @@ public class ArtistDetailFragment extends Fragment {
             startActivity(Intent.createChooser(shareIntent, "Share Artist Via"));
         });
 
-        // Setup Room local persistence storage action
+        // Room background data insertion execution block
         btnSave.setOnClickListener(v -> {
             Executors.newSingleThreadExecutor().execute(() -> {
                 AppDatabase db = AppDatabase.getDatabase(requireContext().getApplicationContext());
-                db.artistDao().insertFavorite(new FavoriteArtist(artistName, String.format("%,d", Long.parseLong(currentListeners)) + " listeners"));
+                String listenerDisplay = "0 listeners";
+                try {
+                    listenerDisplay = String.format("%,d", Long.parseLong(currentListeners)) + " listeners";
+                } catch (Exception ignored) {}
+
+                db.artistDao().insertFavorite(new FavoriteArtist(artistName, listenerDisplay));
                 if (getActivity() != null) {
                     getActivity().runOnUiThread(() -> Toast.makeText(getContext(), artistName + " saved to local database!", Toast.LENGTH_SHORT).show());
                 }
@@ -107,17 +119,27 @@ public class ArtistDetailFragment extends Fragment {
     private void loadData() {
         NetworkManager.fetchArtistDetails(artistName, API_KEY, new NetworkManager.ArtistDetailCallback() {
             @Override
-            public void onSuccess(String bio, String listeners, String url, List<String> topTracks, List<String> similarArtists) {
+            public void onSuccess(String bio, String listeners, String url, List<String> topTracks, List<String> topAlbums, List<String> similarArtists) {
                 if (getActivity() != null) {
                     getActivity().runOnUiThread(() -> {
                         currentListeners = listeners;
                         artistProfileUrl = url;
-                        tvListeners.setText("Global Listeners: " + String.format("%,d", Long.parseLong(listeners)));
+
+                        try {
+                            tvListeners.setText("Global Listeners: " + String.format("%,d", Long.parseLong(listeners)));
+                        } catch (Exception e) {
+                            tvListeners.setText("Global Listeners: " + listeners);
+                        }
+
                         tvBio.setText(bio.isEmpty() ? "No biography available for this artist profile." : bio);
 
                         tracksList.clear();
                         tracksList.addAll(topTracks);
                         tracksAdapter.notifyDataSetChanged();
+
+                        albumsList.clear();
+                        albumsList.addAll(topAlbums);
+                        albumsAdapter.notifyDataSetChanged();
 
                         similarList.clear();
                         similarList.addAll(similarArtists);
@@ -135,7 +157,6 @@ public class ArtistDetailFragment extends Fragment {
         });
     }
 
-    // MULTI-SCREEN USAGE RECYCLERVIEW HOLDER PATTERN ENGINE
     private static class SimpleStringAdapter extends RecyclerView.Adapter<SimpleStringAdapter.ViewHolder> {
         private final List<String> data;
         private final OnItemClickListener listener;

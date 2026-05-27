@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -15,6 +16,7 @@ import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import com.bumptech.glide.Glide;
 import com.google.android.material.progressindicator.CircularProgressIndicator;
 import com.google.android.material.textfield.TextInputEditText;
 import org.json.JSONArray;
@@ -24,7 +26,6 @@ import java.util.List;
 
 public class ChartsFragment extends Fragment {
 
-    // Ensure your real Last.fm API Key string is added here
     private static final String API_KEY = "d419eb5921550293b690b18c178b3556";
 
     private RecyclerView recyclerView;
@@ -39,13 +40,15 @@ public class ChartsFragment extends Fragment {
     static class Artist {
         String name;
         String listeners;
-        Artist(String name, String listeners) {
+        String imageUrl; // Safely added data instance property
+
+        Artist(String name, String listeners, String imageUrl) {
             this.name = name;
             this.listeners = listeners;
+            this.imageUrl = imageUrl;
         }
     }
 
-    // UTILITY METHOD: Checks active internet capabilities before executing network requests
     private boolean isNetworkAvailable() {
         if (getContext() == null) return false;
         ConnectivityManager cm = (ConnectivityManager)
@@ -71,7 +74,6 @@ public class ChartsFragment extends Fragment {
         errorLayout = view.findViewById(R.id.errorLayout);
         errorMessageText = view.findViewById(R.id.errorMessage);
 
-        // Bind layout structures explicitly
         if (recyclerView != null) {
             recyclerView.setLayoutManager(new LinearLayoutManager(requireContext()));
             adapter = new ArtistAdapter(artistList);
@@ -95,9 +97,9 @@ public class ChartsFragment extends Fragment {
             retryBtn.setOnClickListener(v -> {
                 String query = searchEditText != null ? searchEditText.getText().toString().trim() : "";
                 if (!query.isEmpty()) {
-                    executeSearch(query); // Retry explicit search query
+                    executeSearch(query);
                 } else {
-                    fetchData(); // Retry base chart data fetch
+                    fetchData();
                 }
             });
         }
@@ -107,7 +109,6 @@ public class ChartsFragment extends Fragment {
     }
 
     private void fetchData() {
-        // PRE-FLIGHT CHECK: Catch offline state immediately before starting background threads
         if (!isNetworkAvailable()) {
             showErrorState("You are currently offline. Please check your internet connection and try again.");
             return;
@@ -128,7 +129,19 @@ public class ChartsFragment extends Fragment {
                         JSONObject obj = artistArray.getJSONObject(i);
                         String name = obj.getString("name");
                         String listeners = obj.getString("listeners");
-                        artistList.add(new Artist(name, "Listeners: " + listeners));
+
+                        // Parse extra-large image URL path node out of the nested array structure
+                        String imageUrl = "";
+                        if (obj.has("image")) {
+                            JSONArray imgArray = obj.getJSONArray("image");
+                            if (imgArray.length() > 3) {
+                                imageUrl = imgArray.getJSONObject(3).getString("#text");
+                            } else if (imgArray.length() > 0) {
+                                imageUrl = imgArray.getJSONObject(imgArray.length() - 1).getString("#text");
+                            }
+                        }
+
+                        artistList.add(new Artist(name, "Listeners: " + listeners, imageUrl));
                     }
 
                     showSuccessState();
@@ -145,7 +158,6 @@ public class ChartsFragment extends Fragment {
     }
 
     private void executeSearch(String query) {
-        // PRE-FLIGHT CHECK: Intercept search execution if the network is absent
         if (!isNetworkAvailable()) {
             showErrorState("You are currently offline. Cannot perform search query.");
             return;
@@ -167,7 +179,19 @@ public class ChartsFragment extends Fragment {
                         JSONObject obj = artistArray.getJSONObject(i);
                         String name = obj.getString("name");
                         String listeners = obj.has("listeners") ? obj.getString("listeners") : "N/A";
-                        artistList.add(new Artist(name, "Listeners: " + listeners));
+
+                        // Parse image URL asset path node out of search payload structure
+                        String imageUrl = "";
+                        if (obj.has("image")) {
+                            JSONArray imgArray = obj.getJSONArray("image");
+                            if (imgArray.length() > 3) {
+                                imageUrl = imgArray.getJSONObject(3).getString("#text");
+                            } else if (imgArray.length() > 0) {
+                                imageUrl = imgArray.getJSONObject(imgArray.length() - 1).getString("#text");
+                            }
+                        }
+
+                        artistList.add(new Artist(name, "Listeners: " + listeners, imageUrl));
                     }
 
                     if (artistList.isEmpty()) {
@@ -252,6 +276,63 @@ public class ChartsFragment extends Fragment {
                 holder.listenersText.setText(artist.listeners);
             }
 
+            if (holder.artistImage != null) {
+                // Check if the API returned an empty URL or Last.fm's broken star placeholder asset link
+                boolean isPlaceholder = artist.imageUrl == null ||
+                        artist.imageUrl.isEmpty() ||
+                        artist.imageUrl.contains("2a96cbd8b46e442fc41c2b86b821562f") || // Common Last.fm star asset hash
+                        artist.imageUrl.contains("star");
+
+                if (!isPlaceholder) {
+                    // If Last.fm actually gives us a real unique picture, display it!
+                    Glide.with(holder.itemView.getContext())
+                            .load(artist.imageUrl)
+                            .placeholder(android.R.drawable.ic_menu_gallery)
+                            .error(android.R.drawable.ic_menu_gallery)
+                            .into(holder.artistImage);
+                } else {
+                    // DYNAMIC ARTIST INITIAL AVATAR: Generates beautiful colorful cards automatically
+                    holder.artistImage.setImageDrawable(null); // Clear old image
+
+                    // 1. Determine a stable background color matching the artist's name string hash
+                    int[] materialColors = {
+                            0xFFE91E63, 0xFF9C27B0, 0xFF673AB7, 0xFF3F51B5,
+                            0xFF2196F3, 0xFF009688, 0xFF4CAF50, 0xFFFF5722
+                    };
+                    int colorIndex = Math.abs(artist.name.hashCode()) % materialColors.length;
+                    int pickedColor = materialColors[colorIndex];
+
+                    // 2. Extract the first letter of the artist's name safely
+                    String initial = !artist.name.isEmpty() ? artist.name.substring(0, 1).toUpperCase() : "?";
+
+                    // 3. Create a clean shape layer programmatically
+                    android.graphics.drawable.GradientDrawable backgroundShape = new android.graphics.drawable.GradientDrawable();
+                    backgroundShape.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+                    backgroundShape.setCornerRadius(16f); // Beautiful rounded corners matching M3 specifications
+                    backgroundShape.setColor(pickedColor);
+
+                    // 4. Combine the background shape with the uppercase initial text letter
+                    android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(128, 128, android.graphics.Bitmap.Config.ARGB_8888);
+                    android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+
+                    backgroundShape.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+                    backgroundShape.draw(canvas);
+
+                    android.graphics.Paint paint = new android.graphics.Paint();
+                    paint.setColor(android.graphics.Color.WHITE);
+                    paint.setTextSize(54f);
+                    paint.setAntiAlias(true);
+                    paint.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD));
+                    paint.setTextAlign(android.graphics.Paint.Align.CENTER);
+
+                    float yPos = (canvas.getHeight() / 2) - ((paint.descent() + paint.ascent()) / 2);
+                    canvas.drawText(initial, canvas.getWidth() / 2, yPos, paint);
+
+                    // Assign the newly generated custom initial avatar drawable back into the view item row
+                    holder.artistImage.setImageBitmap(bitmap);
+                }
+            }
+
             holder.itemView.setOnClickListener(view -> {
                 if (getActivity() != null) {
                     getActivity().getSupportFragmentManager().beginTransaction()
@@ -267,13 +348,17 @@ public class ChartsFragment extends Fragment {
             return list != null ? list.size() : 0;
         }
 
-        class ViewHolder extends RecyclerView.ViewHolder {
-            TextView nameText, listenersText;
+        // Correctly defined inner ViewHolder class matching all accessed symbols
+        public class ViewHolder extends RecyclerView.ViewHolder {
+            public TextView nameText;
+            public TextView listenersText;
+            public ImageView artistImage;
 
-            ViewHolder(View itemView) {
+            public ViewHolder(View itemView) {
                 super(itemView);
                 nameText = itemView.findViewById(R.id.artistName);
                 listenersText = itemView.findViewById(R.id.artistListeners);
+                artistImage = itemView.findViewById(R.id.artistImageView);
             }
         }
     }
